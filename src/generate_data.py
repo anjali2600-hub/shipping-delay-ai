@@ -2,6 +2,10 @@
 generate_data.py
 Generates a realistic synthetic shipping/delivery dataset for the
 AI-Based Shipping Delay Classification and Mitigation System.
+
+Delay-status thresholds are calibrated from the empirical distribution
+of generated delay_minutes (percentile-based) rather than fixed arbitrary
+cutoffs, to ensure a reasonably balanced spread across categories.
 """
 
 import numpy as np
@@ -85,15 +89,6 @@ def generate_row(shipment_id):
     estimated_delivery_time = round(base_travel_minutes, 1)
     actual_delivery_time = round(base_travel_minutes + delay_minutes, 1)
 
-    if delay_minutes <= 15:
-        delay_status = "On Time"
-    elif delay_minutes <= 60:
-        delay_status = "Slight Delay"
-    elif delay_minutes <= 180:
-        delay_status = "Moderate Delay"
-    else:
-        delay_status = "Severe Delay"
-
     return {
         "shipment_id": shipment_id,
         "origin": origin,
@@ -111,18 +106,36 @@ def generate_row(shipment_id):
         "estimated_delivery_time": estimated_delivery_time,
         "actual_delivery_time": actual_delivery_time,
         "delay_minutes": delay_minutes,
-        "delay_status": delay_status,
     }
+
+
+def classify_delay(delay_minutes, t1, t2, t3):
+    if delay_minutes <= t1:
+        return "On Time"
+    elif delay_minutes <= t2:
+        return "Slight Delay"
+    elif delay_minutes <= t3:
+        return "Moderate Delay"
+    else:
+        return "Severe Delay"
 
 
 def main():
     rows = [generate_row(i + 1) for i in range(N_RECORDS)]
     df = pd.DataFrame(rows)
 
+    t1 = df["delay_minutes"].quantile(0.25)
+    t2 = df["delay_minutes"].quantile(0.60)
+    t3 = df["delay_minutes"].quantile(0.90)
+
+    df["delay_status"] = df["delay_minutes"].apply(lambda d: classify_delay(d, t1, t2, t3))
+
     output_path = "data/sample_shipping_data.csv"
     df.to_csv(output_path, index=False)
 
     print(f"Generated {len(df)} records -> {output_path}")
+    print(f"\nCalibrated thresholds (minutes): On Time <= {t1:.1f} | "
+          f"Slight <= {t2:.1f} | Moderate <= {t3:.1f} | Severe > {t3:.1f}")
     print("\nDelay status distribution:")
     print(df["delay_status"].value_counts())
     print("\nSample rows:")

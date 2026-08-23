@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Prediction Result</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="navbar">
+    <h1>AI-Based Shipping Delay Prediction</h1>
+    <div>
+      <a href="{{ url_for('index') }}">Predict</a>
+      <a href="{{ url_for('history') }}">History</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <h2>{{ raw_input.origin }} &rarr; {{ raw_input.destination }}</h2>
+
+      <div class="result-grid">
+        <div class="stat-box">
+          <div class="label">Predicted Delivery Time</div>
+          <div class="value">{{ prediction.predicted_delivery_time_formatted }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Delay Category</div>
+          <div class="value">{{ prediction.delay_category }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Delay Probability</div>
+          <div class="value">
+            {% if prediction.delay_probability_percent %}
+              {{ prediction.delay_probability_percent }}%
+            {% else %}
+              N/A
+            {% endif %}
+          </div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Risk Level</div>
+          <div class="value">
+            <span class="risk-badge risk-{{ prediction.risk_level }}">{{ prediction.risk_level }}</span>
+          </div>
+        </div>
+      </div>
+
+      <h2>Main Delay Factors</h2>
+      <ul class="factor-list">
+        {% for factor in mitigation.main_factors %}
+          <li>{{ factor }}</li>
+        {% endfor %}
+      </ul>
+
+      <h2 style="margin-top: 24px;">Recommendation</h2>
+      <div class="recommendation-box">
+        {{ mitigation.recommendation }}
+      </div>
+
+      <a href="{{ url_for('index') }}" class="btn btn-secondary" style="margin-top: 24px;">Make Another Prediction</a>
+    </div>
+  </div>
+</body>
+</html>

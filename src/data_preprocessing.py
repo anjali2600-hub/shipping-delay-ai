@@ -1,133 +1,111 @@
 """
-generate_data.py
-Generates a realistic synthetic shipping/delivery dataset for the
-AI-Based Shipping Delay Classification and Mitigation System.
+data_preprocessing.py
+Loads the raw shipment CSV, cleans it, encodes categorical variables,
+and produces train/test splits ready for model training.
 """
 
-import numpy as np
 import pandas as pd
-import random
-from datetime import datetime, timedelta
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+import joblib
+import os
 
-np.random.seed(42)
-random.seed(42)
+from feature_engineering import add_engineered_features
 
-N_RECORDS = 3000
+RAW_DATA_PATH = "data/sample_shipping_data.csv"
+PROCESSED_DIR = "data/processed"
 
-CITIES = [
-    "Mumbai", "Delhi", "Bangalore", "Chennai", "Kolkata",
-    "Hyderabad", "Pune", "Raipur", "Ahmedabad", "Jaipur"
+CATEGORICAL_COLS = [
+    "origin", "destination", "weather_condition", "traffic_level",
+    "route_type", "shipment_type", "distance_category"
 ]
 
-WEATHER_CONDITIONS = ["Clear", "Cloudy", "Rain", "Heavy Rain", "Storm", "Fog"]
-ROUTE_TYPES = ["Highway", "City Road", "Rural Road", "Mixed"]
-SHIPMENT_TYPES = ["Standard", "Express", "Same-Day"]
-TRAFFIC_LEVELS = ["Low", "Medium", "High", "Severe"]
+DROP_COLS = ["shipment_id", "dispatch_time", "actual_delivery_time"]
 
-WEATHER_DELAY_FACTOR = {
-    "Clear": 0, "Cloudy": 5, "Rain": 20, "Heavy Rain": 45, "Storm": 70, "Fog": 30
-}
-TRAFFIC_DELAY_FACTOR = {
-    "Low": 0, "Medium": 15, "High": 40, "Severe": 80
-}
-ROUTE_DELAY_FACTOR = {
-    "Highway": 0, "Mixed": 10, "City Road": 20, "Rural Road": 15
-}
+TARGET_REGRESSION = "delay_minutes"
+TARGET_CLASSIFICATION = "delay_status"
 
 
-def random_dispatch_time():
-    base = datetime(2025, 1, 1)
-    offset_days = random.randint(0, 364)
-    offset_hours = random.randint(6, 22)
-    return base + timedelta(days=offset_days, hours=offset_hours)
+def load_raw_data() -> pd.DataFrame:
+    df = pd.read_csv(RAW_DATA_PATH)
+    return df
 
 
-def generate_row(shipment_id):
-    origin = random.choice(CITIES)
-    destination = random.choice([c for c in CITIES if c != origin])
+def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
 
-    distance_km = round(np.random.uniform(20, 2000), 1)
-    weather_condition = random.choice(WEATHER_CONDITIONS)
-    traffic_level = random.choice(TRAFFIC_LEVELS)
-    route_type = random.choice(ROUTE_TYPES)
-    shipment_type = random.choice(SHIPMENT_TYPES)
+    numeric_cols = df.select_dtypes(include=["float64", "int64"]).columns
+    for col in numeric_cols:
+        if df[col].isnull().sum() > 0:
+            df[col] = df[col].fillna(df[col].median())
 
-    temperature = round(np.random.uniform(10, 45), 1)
-    rainfall = 0.0
-    if weather_condition in ("Rain", "Heavy Rain", "Storm"):
-        rainfall = round(np.random.uniform(5, 80), 1)
-    elif weather_condition == "Cloudy":
-        rainfall = round(np.random.uniform(0, 5), 1)
+    categorical_cols = df.select_dtypes(include=["object"]).columns
+    for col in categorical_cols:
+        if df[col].isnull().sum() > 0:
+            df[col] = df[col].fillna(df[col].mode()[0])
 
-    package_weight = round(np.random.uniform(0.5, 50), 1)
-    historical_delay_rate = round(np.random.uniform(0.0, 0.6), 2)
+    df = df.drop_duplicates()
 
-    dispatch_time = random_dispatch_time()
+    return df
 
-    base_travel_minutes = (distance_km / 45) * 60
 
-    weather_delay = WEATHER_DELAY_FACTOR[weather_condition] * np.random.uniform(0.7, 1.3)
-    traffic_delay = TRAFFIC_DELAY_FACTOR[traffic_level] * np.random.uniform(0.7, 1.3)
-    route_delay = ROUTE_DELAY_FACTOR[route_type] * np.random.uniform(0.7, 1.3)
-    distance_delay = (distance_km / 100) * np.random.uniform(1.0, 3.0)
-    history_delay = historical_delay_rate * 60 * np.random.uniform(0.5, 1.5)
+def encode_features(df: pd.DataFrame):
+    df = df.copy()
+    encoders = {}
 
-    priority_reduction = {"Standard": 0, "Express": -5, "Same-Day": -10}[shipment_type]
+    for col in CATEGORICAL_COLS:
+        if col in df.columns:
+            le = LabelEncoder()
+            df[col] = df[col].astype(str)
+            df[col] = le.fit_transform(df[col])
+            encoders[col] = le
 
-    noise = np.random.normal(0, 10)
+    os.makedirs("models", exist_ok=True)
+    joblib.dump(encoders, "models/label_encoders.pkl")
 
-    delay_minutes = max(
-        0,
-        weather_delay + traffic_delay + route_delay + distance_delay + history_delay + priority_reduction + noise
+    return df, encoders
+
+
+def prepare_datasets():
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+    df = load_raw_data()
+    df = clean_data(df)
+    df = add_engineered_features(df)
+    df, encoders = encode_features(df)
+
+    df.to_csv(f"{PROCESSED_DIR}/processed_shipping_data.csv", index=False)
+
+    feature_cols = [
+        c for c in df.columns
+        if c not in DROP_COLS + [TARGET_REGRESSION, TARGET_CLASSIFICATION]
+    ]
+
+    X = df[feature_cols]
+    y_reg = df[TARGET_REGRESSION]
+    y_clf = df[TARGET_CLASSIFICATION]
+
+    X_train, X_test, y_reg_train, y_reg_test = train_test_split(
+        X, y_reg, test_size=0.2, random_state=42
     )
-    delay_minutes = round(delay_minutes, 1)
+    _, _, y_clf_train, y_clf_test = train_test_split(
+        X, y_clf, test_size=0.2, random_state=42
+    )
 
-    estimated_delivery_time = round(base_travel_minutes, 1)
-    actual_delivery_time = round(base_travel_minutes + delay_minutes, 1)
-
-    if delay_minutes <= 15:
-        delay_status = "On Time"
-    elif delay_minutes <= 60:
-        delay_status = "Slight Delay"
-    elif delay_minutes <= 180:
-        delay_status = "Moderate Delay"
-    else:
-        delay_status = "Severe Delay"
+    joblib.dump(feature_cols, "models/feature_columns.pkl")
 
     return {
-        "shipment_id": shipment_id,
-        "origin": origin,
-        "destination": destination,
-        "distance_km": distance_km,
-        "weather_condition": weather_condition,
-        "temperature": temperature,
-        "rainfall": rainfall,
-        "traffic_level": traffic_level,
-        "route_type": route_type,
-        "package_weight": package_weight,
-        "shipment_type": shipment_type,
-        "dispatch_time": dispatch_time.strftime("%Y-%m-%d %H:%M:%S"),
-        "historical_delay_rate": historical_delay_rate,
-        "estimated_delivery_time": estimated_delivery_time,
-        "actual_delivery_time": actual_delivery_time,
-        "delay_minutes": delay_minutes,
-        "delay_status": delay_status,
+        "X_train": X_train, "X_test": X_test,
+        "y_reg_train": y_reg_train, "y_reg_test": y_reg_test,
+        "y_clf_train": y_clf_train, "y_clf_test": y_clf_test,
+        "feature_cols": feature_cols,
     }
 
 
-def main():
-    rows = [generate_row(i + 1) for i in range(N_RECORDS)]
-    df = pd.DataFrame(rows)
-
-    output_path = "data/sample_shipping_data.csv"
-    df.to_csv(output_path, index=False)
-
-    print(f"Generated {len(df)} records -> {output_path}")
-    print("\nDelay status distribution:")
-    print(df["delay_status"].value_counts())
-    print("\nSample rows:")
-    print(df.head(3).to_string())
-
-
 if __name__ == "__main__":
-    main()
+    data = prepare_datasets()
+    print("Preprocessing complete.")
+    print(f"Feature columns ({len(data['feature_cols'])}):")
+    print(data["feature_cols"])
+    print(f"\nTrain shape: {data['X_train'].shape}")
+    print(f"Test shape: {data['X_test'].shape}")

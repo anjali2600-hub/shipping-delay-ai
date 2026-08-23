@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Prediction History</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="navbar">
+    <h1>AI-Based Shipping Delay Prediction</h1>
+    <div>
+      <a href="{{ url_for('index') }}">Predict</a>
+      <a href="{{ url_for('history') }}">History</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <h2>Recent Predictions</h2>
+
+      {% if shipments %}
+      <table>
+        <thead>
+          <tr>
+            <th>Route</th>
+            <th>Weather</th>
+            <th>Traffic</th>
+            <th>Delivery Time (min)</th>
+            <th>Delay Category</th>
+            <th>Risk</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in shipments %}
+          <tr>
+            <td>{{ s.origin }} &rarr; {{ s.destination }}</td>
+            <td>{{ s.weather_condition }}</td>
+            <td>{{ s.traffic_level }}</td>
+            <td>{{ s.predicted_delivery_time_minutes }}</td>
+            <td>{{ s.delay_category }}</td>
+            <td><span class="risk-badge risk-{{ s.risk_level }}">{{ s.risk_level }}</span></td>
+            <td>{{ s.created_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state">No predictions yet. Go make one!</div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

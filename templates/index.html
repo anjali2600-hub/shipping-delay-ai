@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI-Based Shipping Delay Prediction</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="navbar">
+    <h1>AI-Based Shipping Delay Prediction</h1>
+    <div>
+      <a href="{{ url_for('index') }}">Predict</a>
+      <a href="{{ url_for('history') }}">History</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <h2>Enter Shipment Details</h2>
+      <form id="prediction-form" action="{{ url_for('predict') }}" method="POST">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="origin">Origin</label>
+            <input type="text" id="origin" name="origin" placeholder="e.g. Delhi" required>
+          </div>
+
+          <div class="form-group">
+            <label for="destination">Destination</label>
+            <input type="text" id="destination" name="destination" placeholder="e.g. Mumbai" required>
+          </div>
+
+          <div class="form-group">
+            <label for="distance_km">Distance (km)</label>
+            <input type="number" step="0.1" id="distance_km" name="distance_km" placeholder="Leave blank to auto-fetch">
+          </div>
+
+          <div class="form-group">
+            <label for="traffic_level">Traffic Level</label>
+            <select id="traffic_level" name="traffic_level">
+              <option value="">Auto-fetch</option>
+              <option value="Low">Low</option>
+              <option value="Medium">Medium</option>
+              <option value="High">High</option>
+              <option value="Severe">Severe</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="weather_condition">Weather</label>
+            <select id="weather_condition" name="weather_condition">
+              <option value="">Auto-fetch</option>
+              <option value="Clear">Clear</option>
+              <option value="Cloudy">Cloudy</option>
+              <option value="Rain">Rain</option>
+              <option value="Heavy Rain">Heavy Rain</option>
+              <option value="Storm">Storm</option>
+              <option value="Fog">Fog</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="temperature">Temperature (°C)</label>
+            <input type="number" step="0.1" id="temperature" name="temperature" placeholder="Leave blank to auto-fetch">
+          </div>
+
+          <div class="form-group">
+            <label for="rainfall">Rainfall (mm)</label>
+            <input type="number" step="0.1" id="rainfall" name="rainfall" placeholder="Leave blank to auto-fetch">
+          </div>
+
+          <div class="form-group">
+            <label for="route_type">Route Type</label>
+            <select id="route_type" name="route_type">
+              <option value="Highway">Highway</option>
+              <option value="Mixed">Mixed</option>
+              <option value="City Road">City Road</option>
+              <option value="Rural Road">Rural Road</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="package_weight">Package Weight (kg)</label>
+            <input type="number" step="0.1" id="package_weight" name="package_weight" value="5">
+          </div>
+
+          <div class="form-group">
+            <label for="shipment_type">Shipment Type</label>
+            <select id="shipment_type" name="shipment_type">
+              <option value="Standard">Standard</option>
+              <option value="Express">Express</option>
+              <option value="Same-Day">Same-Day</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="historical_delay_rate">Historical Delay Rate (0-1)</label>
+            <input type="number" step="0.01" min="0" max="1" id="historical_delay_rate" name="historical_delay_rate" value="0.2">
+          </div>
+        </div>
+
+        <button type="submit" class="btn">Predict Delivery</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
