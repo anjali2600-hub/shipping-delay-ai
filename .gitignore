@@ -5,3 +5,5 @@ __pycache__/
 .env
 .vscode/
 .ipynb_checkpoints/
+data/raw/*.csv
+data/processed/

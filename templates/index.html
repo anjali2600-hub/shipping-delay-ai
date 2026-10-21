@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>AI-Based Shipping Delay Prediction</title>
+  <title>AI-Based Delivery Delay Prediction</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
   <div class="navbar">
-    <h1>AI-Based Shipping Delay Prediction</h1>
+    <h1>AI-Based Delivery Delay Prediction</h1>
     <div>
       <a href="{{ url_for('index') }}">Predict</a>
       <a href="{{ url_for('history') }}">History</a>
@@ -16,32 +16,43 @@
 
   <div class="container">
     <div class="card">
-      <h2>Enter Shipment Details</h2>
+      <h2>Enter Delivery Details</h2>
+
+      {% if error %}
+      <div class="error-box">{{ error }}</div>
+      {% endif %}
+
       <form id="prediction-form" action="{{ url_for('predict') }}" method="POST">
         <div class="form-grid">
           <div class="form-group">
-            <label for="origin">Origin</label>
-            <input type="text" id="origin" name="origin" placeholder="e.g. Delhi" required>
+            <label for="store_location">Store location (optional)</label>
+            <input type="text" id="store_location" name="store_location"
+                   placeholder="e.g. Connaught Place, Delhi"
+                   value="{{ form.get('store_location', '') }}">
           </div>
 
           <div class="form-group">
-            <label for="destination">Destination</label>
-            <input type="text" id="destination" name="destination" placeholder="e.g. Mumbai" required>
+            <label for="drop_location">Drop location (optional)</label>
+            <input type="text" id="drop_location" name="drop_location"
+                   placeholder="e.g. Saket, Delhi"
+                   value="{{ form.get('drop_location', '') }}">
           </div>
 
           <div class="form-group">
             <label for="distance_km">Distance (km)</label>
-            <input type="number" step="0.1" id="distance_km" name="distance_km" placeholder="Leave blank to auto-fetch">
+            <input type="number" step="0.1" min="0.5" max="25" id="distance_km" name="distance_km"
+                   placeholder="Leave blank to auto-fetch"
+                   value="{{ form.get('distance_km', '') }}">
+            <span class="hint">City deliveries, up to about 21 km</span>
           </div>
 
           <div class="form-group">
-            <label for="traffic_level">Traffic Level</label>
+            <label for="traffic_level">Traffic</label>
             <select id="traffic_level" name="traffic_level">
               <option value="">Auto-fetch</option>
-              <option value="Low">Low</option>
-              <option value="Medium">Medium</option>
-              <option value="High">High</option>
-              <option value="Severe">Severe</option>
+              {% for t in options.traffic %}
+              <option value="{{ t }}" {% if form.get('traffic_level') == t %}selected{% endif %}>{{ t }}</option>
+              {% endfor %}
             </select>
           </div>
 
@@ -49,52 +60,55 @@
             <label for="weather_condition">Weather</label>
             <select id="weather_condition" name="weather_condition">
               <option value="">Auto-fetch</option>
-              <option value="Clear">Clear</option>
-              <option value="Cloudy">Cloudy</option>
-              <option value="Rain">Rain</option>
-              <option value="Heavy Rain">Heavy Rain</option>
-              <option value="Storm">Storm</option>
-              <option value="Fog">Fog</option>
+              {% for w in options.weather %}
+              <option value="{{ w }}" {% if form.get('weather_condition') == w %}selected{% endif %}>{{ w }}</option>
+              {% endfor %}
             </select>
           </div>
 
           <div class="form-group">
-            <label for="temperature">Temperature (°C)</label>
-            <input type="number" step="0.1" id="temperature" name="temperature" placeholder="Leave blank to auto-fetch">
-          </div>
-
-          <div class="form-group">
-            <label for="rainfall">Rainfall (mm)</label>
-            <input type="number" step="0.1" id="rainfall" name="rainfall" placeholder="Leave blank to auto-fetch">
-          </div>
-
-          <div class="form-group">
-            <label for="route_type">Route Type</label>
-            <select id="route_type" name="route_type">
-              <option value="Highway">Highway</option>
-              <option value="Mixed">Mixed</option>
-              <option value="City Road">City Road</option>
-              <option value="Rural Road">Rural Road</option>
+            <label for="vehicle">Vehicle</label>
+            <select id="vehicle" name="vehicle">
+              {% for v in options.vehicle %}
+              <option value="{{ v }}" {% if form.get('vehicle') == v %}selected{% endif %}>{{ v|capitalize }}</option>
+              {% endfor %}
             </select>
           </div>
 
           <div class="form-group">
-            <label for="package_weight">Package Weight (kg)</label>
-            <input type="number" step="0.1" id="package_weight" name="package_weight" value="5">
-          </div>
-
-          <div class="form-group">
-            <label for="shipment_type">Shipment Type</label>
-            <select id="shipment_type" name="shipment_type">
-              <option value="Standard">Standard</option>
-              <option value="Express">Express</option>
-              <option value="Same-Day">Same-Day</option>
+            <label for="area">Area type</label>
+            <select id="area" name="area">
+              {% for a in options.area %}
+              <option value="{{ a }}" {% if form.get('area') == a %}selected{% endif %}>{{ a }}</option>
+              {% endfor %}
             </select>
           </div>
 
           <div class="form-group">
-            <label for="historical_delay_rate">Historical Delay Rate (0-1)</label>
-            <input type="number" step="0.01" min="0" max="1" id="historical_delay_rate" name="historical_delay_rate" value="0.2">
+            <label for="category">Item category</label>
+            <select id="category" name="category">
+              {% for c in options.category %}
+              <option value="{{ c }}" {% if form.get('category') == c %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="agent_age">Agent age</label>
+            <input type="number" min="15" max="60" id="agent_age" name="agent_age"
+                   value="{{ form.get('agent_age', 30) }}">
+          </div>
+
+          <div class="form-group">
+            <label for="agent_rating">Agent rating (1-5)</label>
+            <input type="number" step="0.1" min="1" max="5" id="agent_rating" name="agent_rating"
+                   value="{{ form.get('agent_rating', 4.7) }}">
+          </div>
+
+          <div class="form-group">
+            <label for="order_time">Order time</label>
+            <input type="datetime-local" id="order_time" name="order_time"
+                   value="{{ form.get('order_time', now) }}">
           </div>
         </div>
 

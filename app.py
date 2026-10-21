@@ -1,115 +1,171 @@
 """
-app.py
-Flask backend for the AI-Based Shipping Delay Classification and
-Mitigation System. Wires together the ML prediction service, maps/
-weather services, mitigation engine, and database.
+app.py  (real-data version, Amazon Delivery Dataset)
+Flask backend: form -> maps/weather auto-fill -> ML prediction ->
+mitigation -> database -> result page.
 """
 
-from flask import Flask, render_template, request, redirect, url_for
+from datetime import datetime
 
-from services.prediction_service import predict_shipment
+from flask import Flask, render_template, request
+
+from database.db import SessionLocal, init_db
+from database.models import Delivery, delivery_to_dict
 from services.maps_service import get_route_data
-from services.weather_service import get_weather_data
 from services.mitigation_service import get_mitigation_summary
-from database.db import init_db, SessionLocal
-from database.models import Shipment, shipment_to_dict
+from services.prediction_service import OPTIONS, predict_shipment
+from services.weather_service import get_weather_data
 
 app = Flask(__name__)
 
-# Create tables on startup if they don't already exist
+# Create the tables on start-up if they do not exist yet
 init_db()
+
+# The model was trained on city deliveries of up to about 21 km
+MAX_DISTANCE_KM = 25
+
+# The maps / weather services use their own labels, so translate them
+# into the labels used in the training data.
+WEATHER_MAP = {
+    "Clear": "Sunny", "Cloudy": "Cloudy", "Fog": "Fog",
+    "Rain": "Stormy", "Heavy Rain": "Stormy", "Storm": "Stormy",
+}
+TRAFFIC_MAP = {"Low": "Low", "Medium": "Medium", "High": "High", "Severe": "Jam"}
+
+
+def render_form(error=None, form=None):
+    """Shows the input form (with an error message if there is one)."""
+    return render_template(
+        "index.html",
+        options=OPTIONS,
+        error=error,
+        form=form or {},
+        now=datetime.now().strftime("%Y-%m-%dT%H:%M"),
+    )
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
-
-
+    return render_form()
 @app.route("/predict", methods=["POST"])
 def predict():
     form = request.form
+    store = form.get("store_location", "").strip()
+    drop = form.get("drop_location", "").strip()
 
-    # Optionally auto-fill distance/traffic from Maps API (mock or live)
-    # if the user didn't manually enter a distance.
-    distance_km = form.get("distance_km", "").strip()
-    traffic_level = form.get("traffic_level", "").strip()
+    # Distance and traffic: use what the user typed, otherwise ask the maps service
+    distance_text = form.get("distance_km", "").strip()
+    traffic = form.get("traffic_level", "").strip()
+    if not distance_text or not traffic:
+        if not (store and drop):
+            return render_form(
+                "Enter the distance and traffic, or fill in both the store "
+                "and drop locations so they can be fetched.", form), 400
+        route = get_route_data(store, drop)
+        distance_text = distance_text or str(route["distance_km"])
+        traffic = traffic or TRAFFIC_MAP.get(route["traffic_level"], "Medium")
 
-    if not distance_km or not traffic_level:
-        route_info = get_route_data(form.get("origin"), form.get("destination"))
-        distance_km = distance_km or route_info["distance_km"]
-        traffic_level = traffic_level or route_info["traffic_level"]
+    # Weather: use what the user chose, otherwise ask the weather service
+    weather = form.get("weather_condition", "").strip()
+    if not weather:
+        place = drop or store
+        if not place:
+            return render_form(
+                "Choose the weather, or enter a location so it can be fetched.",
+                form), 400
+        weather = WEATHER_MAP.get(get_weather_data(place)["condition"], "Sunny")
 
-    # Optionally auto-fill weather from OpenWeather (mock or live)
-    weather_condition = form.get("weather_condition", "").strip()
-    temperature = form.get("temperature", "").strip()
-    rainfall = form.get("rainfall", "").strip()
+    # Numbers and dates
+    try:
+        distance_km = float(distance_text)
+        agent_age = int(form.get("agent_age", "").strip() or 30)
+        agent_rating = float(form.get("agent_rating", "").strip() or 4.7)
+    except ValueError:
+        return render_form(
+            "Distance, agent age and agent rating must be numbers.", form), 400
 
-    if not weather_condition:
-        weather_info = get_weather_data(form.get("destination"))
-        weather_condition = weather_info["condition"]
-        temperature = temperature or weather_info["temperature"]
-        rainfall = rainfall or weather_info["rainfall_mm"]
+    if not 0.5 <= distance_km <= MAX_DISTANCE_KM:
+        return render_form(
+            f"Distance must be between 0.5 and {MAX_DISTANCE_KM} km. The model "
+            "is trained on city deliveries of up to about 21 km.", form), 400
+    if not 1 <= agent_rating <= 5:
+        return render_form("Agent rating must be between 1 and 5.", form), 400
+    if not 15 <= agent_age <= 60:
+        return render_form("Agent age must be between 15 and 60.", form), 400
+
+    order_time_text = form.get("order_time", "").strip()
+    try:
+        order_dt = (datetime.fromisoformat(order_time_text)
+                    if order_time_text else datetime.now())
+    except ValueError:
+        return render_form("The order time is not valid.", form), 400
 
     raw_input = {
-        "origin": form.get("origin"),
-        "destination": form.get("destination"),
-        "distance_km": float(distance_km),
-        "weather_condition": weather_condition,
-        "temperature": float(temperature) if temperature else 25.0,
-        "rainfall": float(rainfall) if rainfall else 0.0,
-        "traffic_level": traffic_level,
-        "route_type": form.get("route_type", "Highway"),
-        "package_weight": float(form.get("package_weight", 5.0)),
-        "shipment_type": form.get("shipment_type", "Standard"),
-        "historical_delay_rate": float(form.get("historical_delay_rate", 0.2)),
+        "distance_km": distance_km,
+        "weather_condition": weather,
+        "traffic_level": traffic,
+        "vehicle": form.get("vehicle", "motorcycle"),
+        "area": form.get("area", "Metropolitan"),
+        "category": form.get("category", "Electronics"),
+        "agent_age": agent_age,
+        "agent_rating": agent_rating,
+        "order_time": order_dt.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     prediction = predict_shipment(raw_input)
     mitigation = get_mitigation_summary(raw_input, prediction)
 
-    # Save to database
+    # Save to the database
     db = SessionLocal()
-    shipment_record = Shipment(
-        origin=raw_input["origin"],
-        destination=raw_input["destination"],
-        distance_km=raw_input["distance_km"],
-        weather_condition=raw_input["weather_condition"],
-        temperature=raw_input["temperature"],
-        rainfall=raw_input["rainfall"],
-        traffic_level=raw_input["traffic_level"],
-        route_type=raw_input["route_type"],
-        package_weight=raw_input["package_weight"],
-        shipment_type=raw_input["shipment_type"],
-        historical_delay_rate=raw_input["historical_delay_rate"],
-        predicted_delivery_time_minutes=prediction["predicted_delivery_time_minutes"],
-        predicted_delay_minutes=prediction["predicted_delay_minutes"],
-        delay_category=prediction["delay_category"],
-        delay_probability_percent=prediction["delay_probability_percent"],
-        risk_level=prediction["risk_level"],
-        will_be_delayed=prediction["will_be_delayed"],
-        main_factors="|".join(mitigation["main_factors"]),
-        recommendation=mitigation["recommendation"],
-    )
-    db.add(shipment_record)
-    db.commit()
-    db.close()
+    try:
+        db.add(Delivery(
+            store_location=store or None,
+            drop_location=drop or None,
+            distance_km=distance_km,
+            weather_condition=weather,
+            traffic_level=traffic,
+            vehicle=raw_input["vehicle"],
+            area=raw_input["area"],
+            category=raw_input["category"],
+            agent_age=agent_age,
+            agent_rating=agent_rating,
+            order_time=order_dt,
+            predicted_delivery_time_minutes=prediction["predicted_delivery_time_minutes"],
+            expected_time_minutes=prediction["expected_time_minutes"],
+            predicted_delay_minutes=prediction["predicted_delay_minutes"],
+            delay_category=prediction["delay_category"],
+            delay_probability_percent=prediction["delay_probability_percent"],
+            serious_delay_probability_percent=prediction["serious_delay_probability_percent"],
+            risk_level=prediction["risk_level"],
+            will_be_delayed=prediction["will_be_delayed"],
+            main_factors="|".join(mitigation["main_factors"]),
+            recommendation=mitigation["recommendation"],
+        ))
+        db.commit()
+    finally:
+        db.close()
 
     return render_template(
         "result.html",
         raw_input=raw_input,
         prediction=prediction,
         mitigation=mitigation,
+        store=store,
+        drop=drop,
     )
 
 
 @app.route("/history", methods=["GET"])
 def history():
     db = SessionLocal()
-    records = db.query(Shipment).order_by(Shipment.created_at.desc()).limit(50).all()
-    db.close()
-
-    shipments = [shipment_to_dict(r) for r in records]
-    return render_template("history.html", shipments=shipments)
+    try:
+        rows = (db.query(Delivery)
+                  .order_by(Delivery.created_at.desc())
+                  .limit(50)
+                  .all())
+        deliveries = [delivery_to_dict(r) for r in rows]
+    finally:
+        db.close()
+    return render_template("history.html", deliveries=deliveries)
 
 
 if __name__ == "__main__":

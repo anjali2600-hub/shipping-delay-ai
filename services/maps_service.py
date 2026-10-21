@@ -7,6 +7,7 @@ the API call fails, so the app never crashes due to a missing key.
 
 import os
 import random
+import zlib
 import requests
 from dotenv import load_dotenv
 
@@ -22,10 +23,10 @@ def _mock_route_data(origin: str, destination: str) -> dict:
     produces the same mock distance (seeded by string hash), so
     repeated demo runs behave consistently.
     """
-    seed = abs(hash((origin.lower(), destination.lower()))) % (10 ** 6)
+    seed = zlib.crc32(f"{origin}|{destination}".lower().encode())
     rng = random.Random(seed)
 
-    distance_km = round(rng.uniform(50, 2000), 1)
+    distance_km = round(rng.uniform(1.5, 20), 1)
     avg_speed_kmh = rng.uniform(35, 60)
     duration_minutes = round((distance_km / avg_speed_kmh) * 60, 1)
 

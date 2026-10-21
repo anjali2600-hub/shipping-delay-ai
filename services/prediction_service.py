@@ -1,188 +1,154 @@
 """
-prediction_service.py
-Loads the best trained models and produces a full prediction for a
-single shipment, given raw (unencoded) user/form input.
+prediction_service.py  (real-data version, Amazon Delivery Dataset)
+Loads the trained models and predicts delivery time, delay minutes,
+delay category, delay probability and risk level for one delivery.
 """
+
+import json
+import os
+from datetime import datetime
 
 import joblib
 import pandas as pd
-import numpy as np
-from datetime import datetime
 
-MODELS_DIR = "models"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_DIR = os.path.join(BASE_DIR, "models", "amazon")
+LABEL_CONFIG_PATH = os.path.join(BASE_DIR, "models", "label_config.json")
 
-# --- Load everything once, at import time (not per-request) ---
-label_encoders = joblib.load(f"{MODELS_DIR}/label_encoders.pkl")
-feature_columns = joblib.load(f"{MODELS_DIR}/feature_columns.pkl")
-delay_status_encoder = joblib.load(f"{MODELS_DIR}/delay_status_encoder.pkl")
-best_model_info = joblib.load(f"{MODELS_DIR}/best_model_info.pkl")
+# Load everything once, when the app starts
+regressor = joblib.load(os.path.join(MODEL_DIR, "best_regressor.pkl"))
+classifier = joblib.load(os.path.join(MODEL_DIR, "best_classifier.pkl"))
+label_encoder = joblib.load(os.path.join(MODEL_DIR, "label_encoder.pkl"))
 
-best_regression_model = joblib.load(f"{MODELS_DIR}/best_model_regression.pkl")
-best_classification_model = joblib.load(f"{MODELS_DIR}/best_model_classification.pkl")
+with open(os.path.join(MODEL_DIR, "model_info.json")) as f:
+    MODEL_INFO = json.load(f)
+with open(LABEL_CONFIG_PATH) as f:
+    LABEL_CONFIG = json.load(f)
 
-REGRESSION_MODEL_NAME = best_model_info["regression"]
-CLASSIFICATION_MODEL_NAME = best_model_info["classification"]
+NUMERIC = MODEL_INFO["numeric_features"]
+CATEGORICAL = MODEL_INFO["categorical_features"]
+FEATURES = NUMERIC + CATEGORICAL
 
-# Same score maps used in feature_engineering.py -- must stay identical
-TRAFFIC_SCORE_MAP = {"Low": 1, "Medium": 2, "High": 3, "Severe": 4}
-WEATHER_SCORE_MAP = {"Clear": 0, "Cloudy": 1, "Fog": 2, "Rain": 3, "Heavy Rain": 4, "Storm": 5}
-ROUTE_SCORE_MAP = {"Highway": 1, "Mixed": 2, "Rural Road": 3, "City Road": 4}
-
-RISK_LEVEL_MAP = {
-    "On Time": "LOW",
-    "Slight Delay": "LOW",
-    "Moderate Delay": "MEDIUM",
-    "Severe Delay": "HIGH",
+# Values that exist in the dataset (the form will offer these)
+OPTIONS = {
+    "weather": ["Sunny", "Cloudy", "Fog", "Stormy", "Sandstorms", "Windy"],
+    "traffic": ["Low", "Medium", "High", "Jam"],
+    "vehicle": ["motorcycle", "scooter", "van"],
+    "area": ["Metropolitan", "Urban", "Semi-Urban", "Other"],
+    "category": [
+        "Apparel", "Books", "Clothing", "Cosmetics", "Electronics", "Grocery",
+        "Home", "Jewelry", "Kitchen", "Outdoors", "Pet Supplies", "Shoes",
+        "Skincare", "Snacks", "Sports", "Toys",
+    ],
 }
 
 
-def _safe_label_encode(column_name: str, value: str) -> int:
-    """
-    Encodes a categorical value using the saved training-time encoder.
-    Falls back to the most common training-time class if the user
-    submits a category the model has never seen (keeps the app from
-    crashing on unexpected input).
-    """
-    encoder = label_encoders[column_name]
-    value = str(value)
-    if value in encoder.classes_:
-        return int(encoder.transform([value])[0])
-    else:
-        # Fallback: encode as the first known class (index 0)
-        return int(encoder.transform([encoder.classes_[0]])[0])
-
-
-def _build_feature_row(raw_input: dict) -> pd.DataFrame:
-    """
-    Takes raw user input and produces a single-row DataFrame with
-    EXACTLY the same columns, in the same order, as the training data.
-    """
-    distance_km = float(raw_input["distance_km"])
-
-    dispatch_time_str = raw_input.get("dispatch_time")
-    if dispatch_time_str:
-        dispatch_dt = pd.to_datetime(dispatch_time_str)
-    else:
-        dispatch_dt = datetime.now()
-
-    dispatch_hour = dispatch_dt.hour
-    is_peak_hour = 1 if (7 <= dispatch_hour <= 10 or 17 <= dispatch_hour <= 20) else 0
-
-    if distance_km <= 100:
-        distance_category = "Short"
-    elif distance_km <= 500:
-        distance_category = "Medium"
-    elif distance_km <= 1000:
-        distance_category = "Long"
-    else:
-        distance_category = "Very Long"
-
-    traffic_level = raw_input["traffic_level"]
-    weather_condition = raw_input["weather_condition"]
-    route_type = raw_input["route_type"]
-
-    traffic_score = TRAFFIC_SCORE_MAP.get(traffic_level, 2)
-    weather_score = WEATHER_SCORE_MAP.get(weather_condition, 1)
-    route_score = ROUTE_SCORE_MAP.get(route_type, 2)
+def _build_row(raw: dict) -> pd.DataFrame:
+    """Turns the user's input into one row with the same columns as training."""
+    order_time = raw.get("order_time")
+    order_dt = pd.to_datetime(order_time) if order_time else datetime.now()
+    hour = order_dt.hour
+    dow = order_dt.weekday()
 
     row = {
-        "origin": _safe_label_encode("origin", raw_input["origin"]),
-        "destination": _safe_label_encode("destination", raw_input["destination"]),
-        "distance_km": distance_km,
-        "weather_condition": _safe_label_encode("weather_condition", weather_condition),
-        "temperature": float(raw_input.get("temperature", 25.0)),
-        "rainfall": float(raw_input.get("rainfall", 0.0)),
-        "traffic_level": _safe_label_encode("traffic_level", traffic_level),
-        "route_type": _safe_label_encode("route_type", route_type),
-        "package_weight": float(raw_input.get("package_weight", 5.0)),
-        "shipment_type": _safe_label_encode("shipment_type", raw_input.get("shipment_type", "Standard")),
-        "historical_delay_rate": float(raw_input.get("historical_delay_rate", 0.2)),
-        "estimated_delivery_time": (distance_km / 45) * 60,  # same formula as training
-        "traffic_score": traffic_score,
-        "weather_score": weather_score,
-        "route_score": route_score,
-        "traffic_distance_interaction": traffic_score * distance_km,
-        "weather_traffic_interaction": weather_score * traffic_score,
-        "dispatch_hour": dispatch_hour,
-        "is_peak_hour": is_peak_hour,
-        "distance_category": _safe_label_encode("distance_category", distance_category),
+        "Agent_Age": float(raw.get("agent_age", 30)),
+        "Agent_Rating": float(raw.get("agent_rating", 4.7)),
+        "distance_km": float(raw["distance_km"]),
+        "order_hour": hour,
+        "day_of_week": dow,
+        "is_weekend": 1 if dow >= 5 else 0,
+        "is_peak_hour": 1 if (7 <= hour <= 10 or 17 <= hour <= 21) else 0,
+        "Weather": raw.get("weather_condition", "Sunny"),
+        "Traffic": raw.get("traffic_level", "Medium"),
+        "Vehicle": raw.get("vehicle", "motorcycle"),
+        "Area": raw.get("area", "Metropolitan"),
+        "Category": raw.get("category", "Electronics"),
     }
-
-    df = pd.DataFrame([row])
-    # Enforce exact column order used during training
-    df = df[feature_columns]
-    return df
+    return pd.DataFrame([row])[FEATURES]
 
 
+def _format_minutes(total_minutes: float) -> str:
+    hours = int(total_minutes // 60)
+    minutes = int(round(total_minutes % 60))
+    if hours > 0:
+        return f"{hours} hour(s) {minutes} minute(s)"
+    return f"{minutes} minute(s)"
 def predict_shipment(raw_input: dict) -> dict:
-    """
-    Main entry point. Takes raw form input (dict) and returns a
-    complete prediction result dict, ready to hand to the frontend.
-    """
-    X = _build_feature_row(raw_input)
+    """Main entry point: raw form input in, full prediction result out."""
+    X = _build_row(raw_input)
 
-    # --- Delivery time / delay minutes (regression) ---
-    predicted_delay_minutes = float(best_regression_model.predict(X)[0])
-    predicted_delay_minutes = max(0.0, predicted_delay_minutes)
+    # Delivery time (regression)
+    predicted_time = max(10.0, float(regressor.predict(X)[0]))
 
-    estimated_base_minutes = X["estimated_delivery_time"].iloc[0]
-    predicted_total_minutes = estimated_base_minutes + predicted_delay_minutes
+    # Delay = predicted time minus the expected time used when labelling
+    distance = float(X["distance_km"].iloc[0])
+    expected_time = LABEL_CONFIG["intercept"] + LABEL_CONFIG["slope"] * distance
+    predicted_delay = max(0.0, predicted_time - expected_time)
 
-    # --- Delay category (classification) ---
-    if CLASSIFICATION_MODEL_NAME == "xgboost_clf":
-        pred_encoded = best_classification_model.predict(X)[0]
-        delay_category = delay_status_encoder.inverse_transform([pred_encoded])[0]
+    # Delay category and probabilities (classification)
+    proba = classifier.predict_proba(X)[0]
+    class_index = int(proba.argmax())
+    delay_category = str(label_encoder.inverse_transform([class_index])[0])
+
+    on_time_index = int(label_encoder.transform(["On Time"])[0])
+    delay_probability = (1.0 - float(proba[on_time_index])) * 100
+    category_confidence = float(proba.max()) * 100
+
+    # Risk level: chance that the delay is 45+ minutes (Moderate or Severe)
+    serious_indices = label_encoder.transform(["Moderate Delay", "Severe Delay"])
+    serious_probability = float(sum(proba[i] for i in serious_indices))
+    if delay_category == "Severe Delay" or serious_probability >= 0.60:
+        risk_level = "HIGH"
+    elif delay_category == "Moderate Delay" or serious_probability >= 0.30:
+        risk_level = "MEDIUM"
     else:
-        delay_category = best_classification_model.predict(X)[0]
-
-    # --- Delay probability (confidence in the predicted category) ---
-    delay_probability = None
-    if hasattr(best_classification_model, "predict_proba"):
-        proba = best_classification_model.predict_proba(X)[0]
-        delay_probability = float(np.max(proba)) * 100  # % confidence
-
-    risk_level = RISK_LEVEL_MAP.get(delay_category, "MEDIUM")
-
-    def format_minutes(total_minutes: float) -> str:
-        hours = int(total_minutes // 60)
-        minutes = int(total_minutes % 60)
-        if hours > 0:
-            return f"{hours} hour(s) {minutes} minute(s)"
-        return f"{minutes} minute(s)"
+        risk_level = "LOW"
 
     return {
-        "predicted_delivery_time_minutes": round(predicted_total_minutes, 1),
-        "predicted_delivery_time_formatted": format_minutes(predicted_total_minutes),
-        "predicted_delay_minutes": round(predicted_delay_minutes, 1),
+        "predicted_delivery_time_minutes": round(predicted_time, 1),
+        "predicted_delivery_time_formatted": _format_minutes(predicted_time),
+        "expected_time_minutes": round(expected_time, 1),
+        "predicted_delay_minutes": round(predicted_delay, 1),
         "delay_category": delay_category,
-        "delay_probability_percent": round(delay_probability, 1) if delay_probability else None,
+        "delay_probability_percent": round(delay_probability, 1),
+        "category_confidence_percent": round(category_confidence, 1),
+        "serious_delay_probability_percent": round(serious_probability * 100, 1),
         "risk_level": risk_level,
         "will_be_delayed": delay_category != "On Time",
         "models_used": {
-            "regression": REGRESSION_MODEL_NAME,
-            "classification": CLASSIFICATION_MODEL_NAME,
+            "regression": MODEL_INFO["best_regressor"],
+            "classification": MODEL_INFO["best_classifier"],
         },
     }
 
 
 if __name__ == "__main__":
-    # Quick manual test
-    sample_input = {
-        "origin": "Delhi",
-        "destination": "Mumbai",
-        "distance_km": 1400,
-        "weather_condition": "Heavy Rain",
-        "temperature": 28,
-        "rainfall": 35,
-        "traffic_level": "High",
-        "route_type": "City Road",
-        "package_weight": 12,
-        "shipment_type": "Express",
-        "historical_delay_rate": 0.3,
-        "dispatch_time": "2026-08-20 09:00:00",
+    scenarios = {
+        "Bad conditions (jam, cloudy, evening rush)": {
+            "distance_km": 8.5,
+            "weather_condition": "Cloudy",
+            "traffic_level": "Jam",
+            "vehicle": "motorcycle",
+            "area": "Metropolitan",
+            "category": "Electronics",
+            "agent_age": 30,
+            "agent_rating": 4.5,
+            "order_time": "2026-10-19 18:30:00",
+        },
+        "Good conditions (low traffic, sunny, late morning)": {
+            "distance_km": 3.0,
+            "weather_condition": "Sunny",
+            "traffic_level": "Low",
+            "vehicle": "scooter",
+            "area": "Urban",
+            "category": "Books",
+            "agent_age": 28,
+            "agent_rating": 4.9,
+            "order_time": "2026-10-19 11:00:00",
+        },
     }
 
-    result = predict_shipment(sample_input)
-    print("Sample prediction:")
-    for k, v in result.items():
-        print(f"  {k}: {v}")
+    for name, sample in scenarios.items():
+        print(f"\n{name}")
+        for key, value in predict_shipment(sample).items():
+            print(f"  {key}: {value}")

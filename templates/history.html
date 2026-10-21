@@ -7,7 +7,7 @@
 </head>
 <body>
   <div class="navbar">
-    <h1>AI-Based Shipping Delay Prediction</h1>
+    <h1>AI-Based Delivery Delay Prediction</h1>
     <div>
       <a href="{{ url_for('index') }}">Predict</a>
       <a href="{{ url_for('history') }}">History</a>
@@ -18,29 +18,35 @@
     <div class="card">
       <h2>Recent Predictions</h2>
 
-      {% if shipments %}
+      {% if deliveries %}
       <table>
         <thead>
           <tr>
             <th>Route</th>
-            <th>Weather</th>
-            <th>Traffic</th>
-            <th>Delivery Time (min)</th>
-            <th>Delay Category</th>
+            <th>Distance</th>
+            <th>Traffic / Weather</th>
+            <th>Time (min)</th>
+            <th>Delay (min)</th>
+            <th>Category</th>
             <th>Risk</th>
             <th>Date</th>
           </tr>
         </thead>
         <tbody>
-          {% for s in shipments %}
+          {% for d in deliveries %}
           <tr>
-            <td>{{ s.origin }} &rarr; {{ s.destination }}</td>
-            <td>{{ s.weather_condition }}</td>
-            <td>{{ s.traffic_level }}</td>
-            <td>{{ s.predicted_delivery_time_minutes }}</td>
-            <td>{{ s.delay_category }}</td>
-            <td><span class="risk-badge risk-{{ s.risk_level }}">{{ s.risk_level }}</span></td>
-            <td>{{ s.created_at }}</td>
+            <td>
+              {% if d.store_location and d.drop_location %}
+                {{ d.store_location }} &rarr; {{ d.drop_location }}
+              {% else %}&ndash;{% endif %}
+            </td>
+            <td>{{ d.distance_km }} km</td>
+            <td>{{ d.traffic_level }} / {{ d.weather_condition }}</td>
+            <td>{{ d.predicted_delivery_time_minutes }}</td>
+            <td>{{ d.predicted_delay_minutes }}</td>
+            <td>{{ d.delay_category }}</td>
+            <td><span class="risk-badge risk-{{ d.risk_level }}">{{ d.risk_level }}</span></td>
+            <td>{{ d.created_at }}</td>
           </tr>
           {% endfor %}
         </tbody>

@@ -7,6 +7,7 @@ generator if no API key is set or the API call fails.
 
 import os
 import random
+import zlib
 import requests
 from dotenv import load_dotenv
 
@@ -23,7 +24,7 @@ def _mock_weather_data(location: str) -> dict:
     Deterministic mock weather, seeded by location name so repeated
     calls for the same city return consistent results in a demo.
     """
-    seed = abs(hash(location.lower())) % (10 ** 6)
+    seed = zlib.crc32(location.lower().encode())
     rng = random.Random(seed)
 
     condition = rng.choice(WEATHER_CONDITIONS)

@@ -1,118 +1,135 @@
 """
-mitigation_service.py
-Rule-based engine that identifies likely delay factors and suggests
-mitigation actions, given the shipment input and the ML prediction
-result. Architecture is intentionally simple/rule-based per spec,
-but kept isolated in its own module so a smarter (e.g. model-driven)
-version could replace it later without touching the rest of the app.
+mitigation_service.py  (real-data version)
+Rule-based engine: lists the likely causes of a delay and suggests actions
+a dispatcher can take. The rules follow patterns seen in the Amazon Delivery
+Dataset (traffic, weather, agent rating, peak hours and distance).
 """
 
+from datetime import datetime
+
+BAD_WEATHER = ("Cloudy", "Fog", "Stormy", "Sandstorms", "Windy")
+BAD_TRAFFIC = ("High", "Jam")
+PEAK_HOURS = list(range(7, 11)) + list(range(17, 22))
+LONG_DISTANCE_KM = 14   # roughly the longest quarter of distances in the data
+LOW_RATING = 4.5        # roughly the lowest quarter of agent ratings
+TIME_MARGIN_MIN = 22    # about the typical error (RMSE) of the time model
+
+
+def _order_hour(raw_input: dict) -> int:
+    order_time = raw_input.get("order_time")
+    if order_time:
+        try:
+            return datetime.fromisoformat(str(order_time)).hour
+        except ValueError:
+            pass
+    return datetime.now().hour
+
+
 def identify_delay_factors(raw_input: dict, prediction: dict) -> list:
-    """
-    Returns a list of human-readable strings describing the main
-    contributors to the predicted delay, ranked roughly by severity.
-    """
+    """Short, readable list of what is likely slowing this delivery down."""
     factors = []
+    traffic = raw_input.get("traffic_level", "Low")
+    weather = raw_input.get("weather_condition", "Sunny")
+    distance = float(raw_input.get("distance_km", 0))
+    rating = float(raw_input.get("agent_rating", 5))
 
-    traffic_level = raw_input.get("traffic_level", "Low")
-    weather_condition = raw_input.get("weather_condition", "Clear")
-    distance_km = float(raw_input.get("distance_km", 0))
-    route_type = raw_input.get("route_type", "Highway")
-    historical_delay_rate = float(raw_input.get("historical_delay_rate", 0))
-
-    if traffic_level in ("High", "Severe"):
-        factors.append(f"{traffic_level} traffic conditions")
-
-    if weather_condition in ("Rain", "Heavy Rain", "Storm", "Fog"):
-        factors.append(f"{weather_condition} weather")
-
-    if distance_km > 1000:
-        factors.append("Long delivery distance")
-    elif distance_km > 500:
-        factors.append("Moderate delivery distance")
-
-    if route_type in ("City Road", "Rural Road"):
-        factors.append(f"{route_type} routing (slower than highway)")
-
-    if historical_delay_rate > 0.3:
-        factors.append("Route has a history of frequent delays")
+    if traffic in BAD_TRAFFIC:
+        factors.append(f"{traffic} traffic")
+    if weather in BAD_WEATHER:
+        factors.append(f"{weather} weather")
+    if _order_hour(raw_input) in PEAK_HOURS:
+        factors.append("Peak-hour delivery")
+    if distance > LONG_DISTANCE_KM:
+        factors.append(f"Long distance ({distance:.1f} km)")
+    if rating < LOW_RATING:
+        factors.append(f"Lower-rated agent ({rating:.1f})")
 
     if not factors:
         factors.append("No major risk factors identified")
-
     return factors
 
 
+def get_actions(raw_input: dict, prediction: dict) -> list:
+    """Actions a dispatcher can take, most useful first (max 3 returned)."""
+    actions = []
+    traffic = raw_input.get("traffic_level", "Low")
+    weather = raw_input.get("weather_condition", "Sunny")
+    distance = float(raw_input.get("distance_km", 0))
+    rating = float(raw_input.get("agent_rating", 5))
+
+    if traffic in BAD_TRAFFIC:
+        actions.append("Pick a route that avoids congested roads.")
+    if rating < LOW_RATING:
+        actions.append("Assign a higher-rated agent.")
+    if weather in BAD_WEATHER:
+        actions.append("Add a time buffer and watch the weather.")
+    if _order_hour(raw_input) in PEAK_HOURS:
+        actions.append("Dispatch before the peak window if possible.")
+    if distance > LONG_DISTANCE_KM:
+        actions.append("Use the nearest available agent.")
+    return actions[:3]
+
+
 def get_recommendation(raw_input: dict, prediction: dict) -> str:
-    """
-    Returns a single, actionable recommendation string based on the
-    combination of traffic, weather, and predicted risk level.
-    """
-    traffic_level = raw_input.get("traffic_level", "Low")
-    weather_condition = raw_input.get("weather_condition", "Clear")
-    risk_level = prediction.get("risk_level", "LOW")
+    """One short recommendation text (kept under the database column limit)."""
+    risk = prediction.get("risk_level", "LOW")
+    minutes = prediction.get("predicted_delivery_time_minutes")
+    actions = get_actions(raw_input, prediction)
 
-    high_traffic = traffic_level in ("High", "Severe")
-    bad_weather = weather_condition in ("Rain", "Heavy Rain", "Storm", "Fog")
+    if risk == "LOW" and not actions:
+        return "Conditions look favourable. Standard dispatch is sufficient."
 
-    # Rule priority: worst combinations first
-    if high_traffic and bad_weather:
-        return (
-            "High risk of significant delay. Consider an alternate route, "
-            "dispatch earlier than usual, and proactively notify the customer "
-            "of a revised delivery window."
+    intro = {
+        "HIGH": "High risk of a long delay.",
+        "MEDIUM": "Some risk of delay.",
+    }.get(risk, "Low delay risk.")
+
+    parts = [intro] + actions
+    if risk in ("MEDIUM", "HIGH") and minutes:
+        low = max(10, round(minutes - TIME_MARGIN_MIN))
+        high = round(minutes + TIME_MARGIN_MIN)
+        parts.append(
+            f"Tell the customer to expect delivery in about {low}-{high} minutes."
         )
-
-    if high_traffic and not bad_weather:
-        return (
-            "Traffic is the main risk factor. Consider an alternate route "
-            "or an earlier dispatch time to avoid peak congestion."
-        )
-
-    if bad_weather and not high_traffic:
-        return (
-            "Weather is the main risk factor. Increase the estimated delivery "
-            "time buffer and monitor conditions in case of further deterioration."
-        )
-
-    if risk_level == "MEDIUM":
-        return (
-            "Some risk of delay present. Monitor traffic and weather updates "
-            "closer to dispatch time."
-        )
-
-    if risk_level == "HIGH":
-        return (
-            "High risk of delay. Recommend proactive customer communication "
-            "and evaluating alternate routing options."
-        )
-
-    return "Conditions look favorable. Standard dispatch procedure is sufficient."
+    return " ".join(parts)[:490]
 
 
 def get_mitigation_summary(raw_input: dict, prediction: dict) -> dict:
-    """
-    Combined entry point: returns both the delay factors and the
-    recommendation together, ready to merge into the final API
-    response shown to the user.
-    """
+    """Factors, actions and the recommendation text, ready for the app."""
     return {
         "main_factors": identify_delay_factors(raw_input, prediction),
+        "actions": get_actions(raw_input, prediction),
         "recommendation": get_recommendation(raw_input, prediction),
     }
 
 
 if __name__ == "__main__":
-    sample_input = {
-        "traffic_level": "High",
-        "weather_condition": "Heavy Rain",
-        "distance_km": 1400,
-        "route_type": "City Road",
-        "historical_delay_rate": 0.35,
-    }
-    sample_prediction = {"risk_level": "HIGH"}
+    tests = [
+        (
+            "Jam, cloudy, evening rush",
+            {"traffic_level": "Jam", "weather_condition": "Cloudy",
+             "distance_km": 8.5, "agent_rating": 4.5,
+             "order_time": "2026-10-19 18:30:00"},
+            {"risk_level": "MEDIUM", "predicted_delivery_time_minutes": 141.9},
+        ),
+        (
+            "Low traffic, sunny, late morning",
+            {"traffic_level": "Low", "weather_condition": "Sunny",
+             "distance_km": 3.0, "agent_rating": 4.9,
+             "order_time": "2026-10-19 11:00:00"},
+            {"risk_level": "LOW", "predicted_delivery_time_minutes": 95.6},
+        ),
+        (
+            "Fog, high traffic, long distance, low-rated agent",
+            {"traffic_level": "High", "weather_condition": "Fog",
+             "distance_km": 16.0, "agent_rating": 4.2,
+             "order_time": "2026-10-19 08:00:00"},
+            {"risk_level": "HIGH", "predicted_delivery_time_minutes": 190.0},
+        ),
+    ]
 
-    result = get_mitigation_summary(sample_input, sample_prediction)
-    print("Mitigation summary:")
-    print(f"  Main factors: {result['main_factors']}")
-    print(f"  Recommendation: {result['recommendation']}")
+    for name, sample, pred in tests:
+        result = get_mitigation_summary(sample, pred)
+        print(f"\n{name}")
+        print(f"  Factors: {result['main_factors']}")
+        print(f"  Recommendation: {result['recommendation']}")

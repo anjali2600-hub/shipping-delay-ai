@@ -1,15 +1,15 @@
-// Basic client-side validation before form submission
+// Small check before the form is sent
 document.addEventListener("DOMContentLoaded", function () {
   const form = document.getElementById("prediction-form");
   if (!form) return;
 
   form.addEventListener("submit", function (e) {
-    const origin = document.getElementById("origin").value.trim();
-    const destination = document.getElementById("destination").value.trim();
+    const store = document.getElementById("store_location").value.trim().toLowerCase();
+    const drop = document.getElementById("drop_location").value.trim().toLowerCase();
 
-    if (origin && destination && origin.toLowerCase() === destination.toLowerCase()) {
+    if (store && drop && store === drop) {
       e.preventDefault();
-      alert("Origin and destination cannot be the same city.");
+      alert("Store and drop locations cannot be the same.");
     }
   });
 });

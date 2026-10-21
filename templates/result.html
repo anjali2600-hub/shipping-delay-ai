@@ -7,7 +7,7 @@
 </head>
 <body>
   <div class="navbar">
-    <h1>AI-Based Shipping Delay Prediction</h1>
+    <h1>AI-Based Delivery Delay Prediction</h1>
     <div>
       <a href="{{ url_for('index') }}">Predict</a>
       <a href="{{ url_for('history') }}">History</a>
@@ -16,7 +16,14 @@
 
   <div class="container">
     <div class="card">
-      <h2>{{ raw_input.origin }} &rarr; {{ raw_input.destination }}</h2>
+      <h2>
+        {% if store and drop %}{{ store }} &rarr; {{ drop }}{% else %}Delivery prediction{% endif %}
+      </h2>
+      <p class="conditions">
+        {{ raw_input.distance_km }} km &middot; {{ raw_input.traffic_level }} traffic &middot;
+        {{ raw_input.weather_condition }} weather &middot; {{ raw_input.vehicle|capitalize }} &middot;
+        {{ raw_input.area }}
+      </p>
 
       <div class="result-grid">
         <div class="stat-box">
@@ -24,24 +31,25 @@
           <div class="value">{{ prediction.predicted_delivery_time_formatted }}</div>
         </div>
         <div class="stat-box">
+          <div class="label">Expected in Best Conditions</div>
+          <div class="value">{{ prediction.expected_time_minutes|round(0)|int }} min</div>
+        </div>
+        <div class="stat-box">
           <div class="label">Delay Category</div>
           <div class="value">{{ prediction.delay_category }}</div>
+          <div class="hint">Predicted delay: {{ prediction.predicted_delay_minutes }} min</div>
         </div>
         <div class="stat-box">
           <div class="label">Delay Probability</div>
-          <div class="value">
-            {% if prediction.delay_probability_percent %}
-              {{ prediction.delay_probability_percent }}%
-            {% else %}
-              N/A
-            {% endif %}
-          </div>
+          <div class="value">{{ prediction.delay_probability_percent }}%</div>
+          <div class="hint">Chance of being more than 15 min late</div>
         </div>
         <div class="stat-box">
           <div class="label">Risk Level</div>
           <div class="value">
             <span class="risk-badge risk-{{ prediction.risk_level }}">{{ prediction.risk_level }}</span>
           </div>
+          <div class="hint">{{ prediction.serious_delay_probability_percent }}% chance of a 45+ min delay</div>
         </div>
       </div>
 

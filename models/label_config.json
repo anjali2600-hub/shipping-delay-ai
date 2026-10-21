@@ -1,0 +1,15 @@
+{
+  "intercept": 76.79120695327863,
+  "slope": 3.2491587896298206,
+  "thresholds": [
+    15,
+    45,
+    90
+  ],
+  "labels": [
+    "On Time",
+    "Slight Delay",
+    "Moderate Delay",
+    "Severe Delay"
+  ]
+}
